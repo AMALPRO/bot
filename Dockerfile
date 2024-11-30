@@ -1,4 +1,3 @@
-# Dockerfile
 FROM node:18-alpine
 
 # Install system dependencies
@@ -16,12 +15,16 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy package.json with a different approach
+COPY package.json package-lock.json* ./
 
-# Clear npm cache and install dependencies
+# Clear npm cache and install dependencies, with error handling
 RUN npm cache clean --force && \
-    npm install --legacy-peer-deps
+    if [ -f package-lock.json ]; then \
+      npm ci; \
+    else \
+      npm install --legacy-peer-deps; \
+    fi
 
 # Copy the rest of the application code
 COPY . .
