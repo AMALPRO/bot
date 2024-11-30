@@ -1,27 +1,17 @@
 services:
   - type: web
-    name: whatsapp-bot
-    runtime: docker
+    name: whatsapp-broadcast-bot
+    runtime: node
     branch: main
-    buildCommand: docker build -t whatsapp-bot .
-    
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
-      - key: NODE_ENV
-        value: production
-      
-      - key: BOT_OWNERS
-        value: +917356008536
-      
-      - key: MAX_CONCURRENT_BROADCASTS
-        value: "3"
-      
-      - key: BROADCAST_DELAY
-        value: "2000"
-      
-      - key: RATE_LIMIT_WINDOW
-        value: "300000"
-
+      - key: NPM_CONFIG_PRODUCTION
+        value: false
+      - key: NODE_OPTIONS
+        value: --max_old_space_size=4096
+    healthCheckPath: /
     disk:
-      name: whatsapp-bot-auth
+      name: auth_info_baileys
       mountPath: /app/auth_info_baileys
       sizeGB: 1
