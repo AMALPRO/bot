@@ -16,11 +16,12 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json (if it exists)
+# Copy package.json and package-lock.json
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Clear npm cache and install dependencies
+RUN npm cache clean --force && \
+    npm install --legacy-peer-deps
 
 # Copy the rest of the application code
 COPY . .
