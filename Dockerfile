@@ -1,43 +1,40 @@
-FROM node:18-alpine
+# Use an official Node runtime as a parent image
+FROM node:20-slim
 
-# Install system dependencies
-RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont \
-    nodejs \
-    npm
+# Set the working directory in the container
+WORKDIR /usr/src/app
 
-# Set working directory
-WORKDIR /app
+# Install necessary system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    fontconfig \
+    locales \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy package.json with a different approach
-COPY package.json package-lock.json* ./
+# Ensure UTF-8 locale
+RUN locale-gen en_US.UTF-8
+ENV LANG en_US.UTF-8
+ENV LANGUAGE en_US:en
+ENV LC_ALL en_US.UTF-8
 
-# Clear npm cache and install dependencies, with error handling
-RUN npm cache clean --force && \
-    if [ -f package-lock.json ]; then \
-      npm ci; \
-    else \
-      npm install --legacy-peer-deps; \
-    fi
+# Copy package.json and package-lock.json (if exists)
+COPY package*.json ./
+
+# Install app dependencies
+RUN npm install
 
 # Copy the rest of the application code
 COPY . .
 
-# Create auth directory
+# Create directory for authentication info
 RUN mkdir -p auth_info_baileys
 
-# Set environment variables for Puppeteer
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-
 # Expose any necessary ports (if needed)
-EXPOSE 3000
+# EXPOSE 8080
 
-# Command to run the bot
+# Use volume for persistent authentication
+VOLUME ["/usr/src/app/auth_info_baileys"]
+
+# Command to run the application
 CMD ["node", "index.js"]
