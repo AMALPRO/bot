@@ -13,11 +13,11 @@ RUN apt-get update && apt-get install -y \
 # Set environment to production
 ENV NODE_ENV=production
 
-# Install dependencies
+# Copy package files first to leverage Docker cache
 COPY package*.json ./
 
 # Install production dependencies
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 # Copy application code
 COPY . .
