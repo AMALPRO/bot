@@ -4,17 +4,14 @@ services:
     runtime: docker
     branch: main
     buildCommand: docker build -t whatsapp-bot .
-    startCommand: docker run whatsapp-bot
+    
     envVars:
       - key: NODE_ENV
         value: production
       
-      # Configuration variables - replace with your actual values
       - key: BOT_OWNERS
         value: +917356008536
-        # Add more owners by comma separating their numbers
-
-      # Optional: Add rate limiting and broadcast configuration if needed
+      
       - key: MAX_CONCURRENT_BROADCASTS
         value: "3"
       
@@ -22,10 +19,9 @@ services:
         value: "2000"
       
       - key: RATE_LIMIT_WINDOW
-        value: "300000"  # 5 minutes in milliseconds
+        value: "300000"
 
-    # Optional: Configure disk for persistent storage of authentication info
     disk:
       name: whatsapp-bot-auth
       mountPath: /app/auth_info_baileys
-      sizeGB: 1  # Adjust size as needed
+      sizeGB: 1
