@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  whatsapp-bot:
+    build: .
+    container_name: whatsapp-broadcast-bot
+    volumes:
+      - ./auth_info_baileys:/usr/src/app/auth_info_baileys
+    restart: unless-stopped
