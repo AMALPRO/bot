@@ -1,15 +1,21 @@
 {
   "name": "whatsapp-bot",
   "version": "1.0.0",
+  "description": "WhatsApp Bot",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-"dependencies": {
-  "@whiskeysockets/baileys": "latest",
-  "express": "latest",
-  "qrcode": "latest",
-  "pino": "latest",
-  "@hapi/boom": "latest",
-  "link-preview-js": "latest"
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "express": "latest",
+    "qrcode": "latest",
+    "pino": "latest",
+    "@hapi/boom": "latest",
+    "link-preview-js": "latest"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
 }
