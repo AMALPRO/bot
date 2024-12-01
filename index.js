@@ -1,177 +1,202 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
+const QRCode = require('qrcode');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
-
-// Enhanced logging configuration
-const logger = pino({ 
-    level: 'info',
-    transport: {
-        target: 'pino-pretty',
-        options: {
-            colorize: true,
-            translateTime: 'SYS:standard',
-            ignore: 'pid,hostname'
-        }
-    }
-});
 
 // Configuration for multiple owners and bot settings
 const CONFIG = {
     OWNERS: [
         '+917356008536'  // Ensure this is the correct full international number
     ],
-    MAX_RECONNECT_ATTEMPTS: 10,
-    RECONNECT_DELAY: 5000,
-    CONNECTION_TIMEOUT: 60000
+    MAX_CONCURRENT_BROADCASTS: 3,
+    BROADCAST_DELAY: 2000,
+    RATE_LIMIT_DELAY: 5000,
+    RATE_LIMIT_WINDOW: 5 * 60 * 1000,
+    MAX_BROADCASTS_PER_WINDOW: 50,
+    MESSAGE_TIMEOUT: 10000
 };
 
 const CREDENTIALS_PATH = 'auth_info_baileys/creds.json';
 
 // Create Express app for port binding
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
-// Health check route
-app.get('/', (req, res) => {
-    res.send('WhatsApp Bot is running');
+// Global variables to store connection state
+let globalSock = null;
+let qrCode = null;
+
+// Health check and QR code route
+app.get('/', async (req, res) => {
+    if (qrCode) {
+        // If QR code is available, serve an HTML page with the QR code
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>WhatsApp Bot QR Code</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        display: flex; 
+                        flex-direction: column; 
+                        align-items: center; 
+                        justify-content: center; 
+                        height: 100vh; 
+                        margin: 0; 
+                        background-color: #f0f0f0; 
+                    }
+                    #qr-code { 
+                        max-width: 300px; 
+                        margin-bottom: 20px; 
+                    }
+                    #status {
+                        margin-top: 20px;
+                        text-align: center;
+                    }
+                </style>
+            </head>
+            <body>
+                <h1>Scan WhatsApp QR Code</h1>
+                <img id="qr-code" src="${qrCode}" alt="WhatsApp QR Code">
+                <div id="status">Waiting for QR code to be scanned...</div>
+                <script>
+                    // Implement QR code status polling
+                    function checkConnectionStatus() {
+                        fetch('/connection-status')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.connected) {
+                                    document.getElementById('status').innerHTML = 'Connected! Bot is now running.';
+                                    document.getElementById('qr-code').style.display = 'none';
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error checking connection status:', error);
+                            });
+                    }
+                    
+                    // Poll every 5 seconds
+                    setInterval(checkConnectionStatus, 5000);
+                </script>
+            </body>
+            </html>
+        `);
+    } else {
+        res.send('WhatsApp Bot is running. Initializing connection...');
+    }
+});
+
+// Connection status route
+app.get('/connection-status', (req, res) => {
+    res.json({ 
+        connected: globalSock !== null,
+        qrAvailable: qrCode !== null
+    });
 });
 
 // Start Express server
 const server = app.listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
-
-let reconnectAttempts = 0;
-let sock = null;
 
 async function connectToWhatsApp() {
     try {
-        // Verify credentials exist
-        const credentialsExist = fs.existsSync(CREDENTIALS_PATH);
-        logger.info(`Credentials exist: ${credentialsExist}`);
-
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
         
-        sock = makeWASocket({
+        const sock = makeWASocket({
             logger: pino({ level: 'warn' }),
             printQRInTerminal: false,
             auth: state,
             browser: ['WhatsApp Bot', 'Chrome', '20.0.0'],
-            connectTimeoutMs: CONFIG.CONNECTION_TIMEOUT,
-            maxRetries: 3,
+            connectTimeoutMs: 60000,
+            maxRetries: 5,
             retryRequestDelayMs: 5000,
             defaultQueryTimeoutMs: 60000,
+            generateHighQualityLinkPreview: true,
+            qrTimeout: 45000, // 45 seconds QR code timeout
         });
 
-        // Connection event handler with improved logging
+        // QR code generation
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-            logger.info(`Connection Update: ${connection || 'undefined'}`);
+            const { connection, lastDisconnect, qr } = update;
+            
+            // Generate QR code if available
+            if (qr) {
+                qrCode = await QRCode.toDataURL(qr);
+                console.log('QR Code Generated');
+            }
 
             if (connection === 'close') {
                 const shouldReconnect = 
-                    lastDisconnect?.error &&
-                    (lastDisconnect.error instanceof Boom
-                        ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
+                    lastDisconnect?.error && 
+                    (lastDisconnect.error instanceof Boom 
+                        ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut 
                         : true);
                 
-                logger.warn('Connection closed.', {
-                    shouldReconnect,
-                    errorCode: lastDisconnect?.error instanceof Boom 
-                        ? lastDisconnect.error.output.statusCode 
-                        : 'N/A'
-                });
+                console.log('Connection closed. Reconnecting:', shouldReconnect);
                 
-                if (shouldReconnect && reconnectAttempts < CONFIG.MAX_RECONNECT_ATTEMPTS) {
-                    reconnectAttempts++;
-                    logger.info(`Reconnection attempt ${reconnectAttempts}`);
-                    
-                    setTimeout(() => {
-                        connectToWhatsApp().catch(err => {
-                            logger.error('Reconnection failed:', err);
-                        });
-                    }, CONFIG.RECONNECT_DELAY);
+                // Reset global variables
+                globalSock = null;
+                qrCode = null;
+                
+                if (shouldReconnect) {
+                    setTimeout(connectToWhatsApp, 1000);
                 } else {
-                    logger.error('Maximum reconnection attempts reached. Manual intervention required.');
-                    process.exit(1);
+                    console.log('Connection permanently closed. Manual intervention required.');
                 }
             } else if (connection === 'open') {
-                reconnectAttempts = 0;
-                logger.info('Bot is now connected!');
-                logger.info(`Bot User ID: ${sock.user.id}`);
+                console.log('Bot is now connected!');
+                console.log('Bot User ID:', sock.user.id);
+                
+                // Store global socket
+                globalSock = sock;
+                qrCode = null;
+
+                // Send message to owner
+                try {
+                    const ownerNumber = CONFIG.OWNERS[0];
+                    await sock.sendMessage(ownerNumber + '@s.whatsapp.net', { 
+                        text: `🤖 WhatsApp Bot successfully started!\n\nBot is now online and ready to use.\n\nCurrent Bot ID: ${sock.user.id}` 
+                    });
+                } catch (msgError) {
+                    console.error('Error sending startup message:', msgError);
+                }
             }
         });
 
-        // Credentials update handler
+        // Save credentials when they update
         sock.ev.on('creds.update', saveCreds);
-
-        // Ensure auth directory exists
-        if (!fs.existsSync('auth_info_baileys')) {
-            fs.mkdirSync('auth_info_baileys');
-        }
 
         return sock;
     } catch (error) {
-        logger.error('Fatal error in WhatsApp connection:', error);
-        
-        if (reconnectAttempts < CONFIG.MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempts++;
-            logger.info(`Reconnection attempt ${reconnectAttempts}`);
-            
-            setTimeout(() => {
-                connectToWhatsApp().catch(err => {
-                    logger.error('Reconnection failed:', err);
-                });
-            }, CONFIG.RECONNECT_DELAY);
-        } else {
-            logger.error('Maximum reconnection attempts reached. Manual intervention required.');
-            process.exit(1);
-        }
-        
-        throw error;
+        console.error('Fatal error in WhatsApp connection:', error);
+        // Attempt to reconnect after a delay
+        setTimeout(connectToWhatsApp, 5000);
     }
 }
 
 // Global error handling
 process.on('uncaughtException', (err) => {
-    logger.error('Uncaught Exception:', err);
-    // Attempt to restart the bot process
-    connectToWhatsApp().catch(err => {
-        logger.error('Failed to restart after uncaught exception:', err);
-        process.exit(1);
-    });
+    console.error('Uncaught Exception:', err);
+    // Attempt to restart
+    globalSock = null;
+    qrCode = null;
+    setTimeout(connectToWhatsApp, 1000);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    // Attempt to restart the bot process
-    connectToWhatsApp().catch(err => {
-        logger.error('Failed to restart after unhandled rejection:', err);
-        process.exit(1);
-    });
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    logger.info('SIGTERM received. Shutting down gracefully.');
-    
-    if (sock) {
-        sock.logout().catch(err => {
-            logger.error('Error during logout:', err);
-        });
-    }
-    
-    server.close(() => {
-        logger.info('HTTP server closed.');
-        process.exit(0);
-    });
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    // Attempt to restart
+    globalSock = null;
+    qrCode = null;
+    setTimeout(connectToWhatsApp, 1000);
 });
 
 // Start the bot
 connectToWhatsApp().catch(err => {
-    logger.error('Initial connection error:', err);
-    process.exit(1);
+    console.error('Initial connection error:', err);
 });
