@@ -1,14 +1,14 @@
 {
-  "name": "whatsapp-broadcast-bot",
+  "name": "whatsapp-bot",
   "version": "1.0.0",
-  "description": "WhatsApp Broadcast Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
+    "@hapi/boom": "latest",
     "pino": "latest",
-    "@hapi/boom": "latest"
+    "express": "latest"
   }
 }
