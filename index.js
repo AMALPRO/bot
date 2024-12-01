@@ -9,13 +9,15 @@ const CONFIG = {
     OWNERS: [
         '+917356008536'  // Ensure this is the correct full international number
     ],
-    MAX_CONCURRENT_BROADCASTS: 3, // Reduced for better stability
-    BROADCAST_DELAY: 2000, // Increased delay to 2 seconds between messages
-    RATE_LIMIT_DELAY: 5000, // 5 seconds delay if rate limited
-    RATE_LIMIT_WINDOW: 5 * 60 * 1000, // 5 minutes
+    MAX_CONCURRENT_BROADCASTS: 3,
+    BROADCAST_DELAY: 2000,
+    RATE_LIMIT_DELAY: 5000,
+    RATE_LIMIT_WINDOW: 5 * 60 * 1000,
     MAX_BROADCASTS_PER_WINDOW: 50,
-    MESSAGE_TIMEOUT: 10000 // 10 seconds timeout for each message
+    MESSAGE_TIMEOUT: 10000
 };
+
+const CREDENTIALS_PATH = 'auth_info_baileys/creds.json';
 
 // Store channels and groups data
 let channels = [];
@@ -30,24 +32,30 @@ let broadcastStats = {
 };
 
 async function connectToWhatsApp() {
+    // Check if credentials exist
+    if (!fs.existsSync(CREDENTIALS_PATH)) {
+        console.error('No credentials found! Please run the QR generator first and scan the QR code.');
+        process.exit(1);
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
-        logger: pino({ level: 'warn' }), // Reduced logging
-        printQRInTerminal: true,
+        logger: pino({ level: 'warn' }),
+        printQRInTerminal: false, // Disable QR printing in main bot
         auth: state,
-        // Add browser configuration to reduce ban risk
         browser: ['WhatsApp Bot', 'Chrome', '20.0.0'],
-        // Implement additional anti-ban measures
         connectTimeoutMs: 60000,
         maxRetries: 3,
+        // Add connection options for better stability
+        retryRequestDelayMs: 5000,
+        defaultQueryTimeoutMs: 60000,
     });
 
     // Enhanced message sending function with retry mechanism
     async function sendMessageWithRetry(sock, chatId, message, retries = 3) {
         for (let attempt = 1; attempt <= retries; attempt++) {
             try {
-                // Prepare message options based on message type
                 let msgOptions;
                 if (message.text) {
                     msgOptions = { text: message.text };
@@ -76,25 +84,19 @@ async function connectToWhatsApp() {
                     msgOptions = { text: 'Broadcast message' };
                 }
 
-                // Send message with a timeout
                 const sendPromise = sock.sendMessage(chatId, msgOptions);
                 const timeoutPromise = new Promise((_, reject) => 
                     setTimeout(() => reject(new Error('Message send timeout')), CONFIG.MESSAGE_TIMEOUT)
                 );
 
                 await Promise.race([sendPromise, timeoutPromise]);
-
                 console.log(`Message sent successfully to ${chatId}`);
                 return true;
             } catch (error) {
                 console.error(`Send attempt ${attempt} failed for ${chatId}:`, error);
-
-                // Implement exponential backoff
                 await new Promise(resolve => 
                     setTimeout(resolve, CONFIG.RATE_LIMIT_DELAY * attempt)
                 );
-
-                // If it's the last retry, return false
                 if (attempt === retries) {
                     console.error(`Failed to send message to ${chatId} after ${retries} attempts`);
                     return false;
@@ -113,6 +115,8 @@ async function connectToWhatsApp() {
             
             if (shouldReconnect) {
                 connectToWhatsApp();
+            } else {
+                console.log('Connection closed. Please check your credentials and restart the bot.');
             }
         } else if (connection === 'open') {
             console.log('Bot is now connected!');
@@ -130,25 +134,21 @@ async function connectToWhatsApp() {
         
         const messageContent = m.message?.conversation || m.message?.extendedTextMessage?.text || '';
         const isReply = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        
-        // Determine sender (use participant for group messages, remoteJid for others)
         const sender = m.key.participant || m.key.remoteJid;
+
         console.log('Incoming Message Details:');
         console.log('Sender:', sender);
         console.log('Message Content:', messageContent);
 
-        // Handle broadcast commands
         if (messageContent.startsWith('/broadcast') && isReply) {
             console.log('Broadcast command detected');
             
-            // Enhanced admin check with detailed logging
             const adminCheckResult = await isAdmin(sock, sender);
             console.log('Admin Check Result:', adminCheckResult);
 
             if (adminCheckResult) {
                 const repliedMessage = await getQuotedMessage(m);
                 if (repliedMessage) {
-                    // Reset broadcast stats
                     broadcastStats = {
                         total: 0,
                         success: 0,
@@ -156,7 +156,6 @@ async function connectToWhatsApp() {
                         lastBroadcastTime: Date.now()
                     };
 
-                    // Broadcast based on target
                     let results;
                     if (messageContent.includes('channels')) {
                         results = await broadcastToChannels(sock, repliedMessage, sendMessageWithRetry);
@@ -166,7 +165,6 @@ async function connectToWhatsApp() {
                         results = await broadcastToAll(sock, repliedMessage, sendMessageWithRetry);
                     }
 
-                    // Send summary message
                     await sock.sendMessage(m.key.remoteJid, {
                         text: `📊 Broadcast Summary:\n` +
                               `Total Targets: ${results.total}\n` +
@@ -184,12 +182,10 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Updated broadcast function to use custom send message function
     async function broadcastWithRateLimit(sock, targets, message, sendFunc) {
         let successCount = 0;
         let failCount = 0;
         
-        // Check rate limiting
         const now = Date.now();
         if (now - broadcastStats.lastBroadcastTime < CONFIG.RATE_LIMIT_WINDOW && 
             broadcastStats.total >= CONFIG.MAX_BROADCASTS_PER_WINDOW) {
@@ -197,30 +193,23 @@ async function connectToWhatsApp() {
             return { success: 0, failed: targets.length };
         }
 
-        // Process targets in smaller batches
         for (let i = 0; i < targets.length; i += CONFIG.MAX_CONCURRENT_BROADCASTS) {
             const batch = targets.slice(i, i + CONFIG.MAX_CONCURRENT_BROADCASTS);
             
-            // Send messages concurrently in the batch
             const batchResults = await Promise.all(
                 batch.map(async (target) => {
                     const result = await sendFunc(sock, target.id, message);
-                    
-                    // Add delay between messages
                     await new Promise(resolve => 
                         setTimeout(resolve, CONFIG.BROADCAST_DELAY)
                     );
-                    
                     return result;
                 })
             );
 
-            // Update success and fail counts
             successCount += batchResults.filter(result => result).length;
             failCount += batchResults.filter(result => !result).length;
         }
 
-        // Update global broadcast stats
         broadcastStats.total += targets.length;
         broadcastStats.success += successCount;
         broadcastStats.failed += failCount;
@@ -233,7 +222,6 @@ async function connectToWhatsApp() {
         };
     }
 
-    // Broadcast functions using the new rate-limited approach
     async function broadcastToChannels(sock, message, sendFunc) {
         return await broadcastWithRateLimit(sock, channels, message, sendFunc);
     }
@@ -247,24 +235,20 @@ async function connectToWhatsApp() {
         return await broadcastWithRateLimit(sock, allTargets, message, sendFunc);
     }
 
-    // Existing helper functions remain the same
     async function updateChannelsAndGroupsList(sock) {
         try {
             const chats = await sock.groupFetchAllParticipating();
             
-            // Reset arrays
             channels = [];
             groups = [];
             
             for (const chat of Object.values(chats)) {
-                // Check if the chat has the channel property (new WhatsApp channels feature)
                 if (chat.isChannel || chat.subject?.startsWith('Channel: ')) {
                     channels.push({
                         id: chat.id,
                         name: chat.subject
                     });
                 } else {
-                    // Regular groups
                     groups.push({
                         id: chat.id,
                         name: chat.subject
@@ -283,17 +267,14 @@ async function connectToWhatsApp() {
             const quotedMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
             if (!quotedMessage) return null;
 
-            // Text message
             if (quotedMessage.conversation) {
                 return { text: quotedMessage.conversation };
             }
 
-            // Extended text message
             if (quotedMessage.extendedTextMessage) {
                 return { text: quotedMessage.extendedTextMessage.text };
             }
 
-            // Image message
             if (quotedMessage.imageMessage) {
                 return {
                     image: {
@@ -304,7 +285,6 @@ async function connectToWhatsApp() {
                 };
             }
 
-            // Video message
             if (quotedMessage.videoMessage) {
                 return {
                     video: {
@@ -315,7 +295,6 @@ async function connectToWhatsApp() {
                 };
             }
 
-            // Document message
             if (quotedMessage.documentMessage) {
                 return {
                     document: {
@@ -327,7 +306,6 @@ async function connectToWhatsApp() {
                 };
             }
 
-            // Audio message
             if (quotedMessage.audioMessage) {
                 return {
                     audio: {
@@ -346,7 +324,6 @@ async function connectToWhatsApp() {
 
     async function isAdmin(sock, userId) {
         try {
-            // Normalize phone numbers by removing all non-digit characters
             const normalizeNumber = (num) => num.replace(/\D/g, '');
             
             console.log('Admin Check Debug:');
@@ -354,17 +331,13 @@ async function connectToWhatsApp() {
             console.log('Bot User ID:', sock.user.id);
             console.log('Registered Owners:', CONFIG.OWNERS);
             
-            // Normalize and compare numbers
             const normalizedUserId = normalizeNumber(userId);
             const normalizedOwners = CONFIG.OWNERS.map(normalizeNumber);
             
             console.log('Normalized User ID:', normalizedUserId);
             console.log('Normalized Owners:', normalizedOwners);
             
-            // Check if the user is in the owners list
             const isOwner = normalizedOwners.includes(normalizedUserId);
-            
-            // Also check against the bot's own user ID
             const isBotSelf = normalizeNumber(sock.user.id) === normalizedUserId;
 
             if (isOwner || isBotSelf) {
@@ -388,5 +361,19 @@ async function connectToWhatsApp() {
     return sock;
 }
 
+// Error handling for the main process
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    // Optionally restart the bot here
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    // Optionally restart the bot here
+});
+
 // Start the bot
-connectToWhatsApp().catch(console.error);
+connectToWhatsApp().catch(err => {
+    console.error('Error in main bot process:', err);
+    process.exit(1);
+});
