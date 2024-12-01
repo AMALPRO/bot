@@ -53,7 +53,7 @@ async function connectToWhatsApp() {
         console.log('Credentials exist:', credentialsExist);
 
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    
+        
         const sock = makeWASocket({
             logger: pino({ level: 'warn' }),
             printQRInTerminal: false,
@@ -65,16 +65,70 @@ async function connectToWhatsApp() {
             defaultQueryTimeoutMs: 60000,
         });
 
-        // Connection event handlers (rest of the code remains the same as in previous script)
+        // Enhanced message sending function with retry mechanism
+        async function sendMessageWithRetry(sock, chatId, message, retries = 3) {
+            for (let attempt = 1; attempt <= retries; attempt++) {
+                try {
+                    let msgOptions;
+                    if (message.text) {
+                        msgOptions = { text: message.text };
+                    } else if (message.image) {
+                        msgOptions = { 
+                            image: { url: message.image.url },
+                            caption: message.caption || ''
+                        };
+                    } else if (message.video) {
+                        msgOptions = { 
+                            video: { url: message.video.url },
+                            caption: message.caption || ''
+                        };
+                    } else if (message.document) {
+                        msgOptions = { 
+                            document: { url: message.document.url },
+                            mimetype: message.document.mimetype,
+                            fileName: message.document.fileName
+                        };
+                    } else if (message.audio) {
+                        msgOptions = { 
+                            audio: { url: message.audio.url },
+                            mimetype: message.audio.mimetype
+                        };
+                    } else {
+                        msgOptions = { text: 'Broadcast message' };
+                    }
+
+                    const sendPromise = sock.sendMessage(chatId, msgOptions);
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Message send timeout')), CONFIG.MESSAGE_TIMEOUT)
+                    );
+
+                    await Promise.race([sendPromise, timeoutPromise]);
+                    console.log(`Message sent successfully to ${chatId}`);
+                    return true;
+                } catch (error) {
+                    console.error(`Send attempt ${attempt} failed for ${chatId}:`, error);
+                    await new Promise(resolve => 
+                        setTimeout(resolve, CONFIG.RATE_LIMIT_DELAY * attempt)
+                    );
+                    if (attempt === retries) {
+                        console.error(`Failed to send message to ${chatId} after ${retries} attempts`);
+                        return false;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Connection event handler
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             console.log('Connection Update:', connection);
 
             if (connection === 'close') {
                 const shouldReconnect = 
-                    lastDisconnect?.error && 
-                    (lastDisconnect.error instanceof Boom 
-                        ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut 
+                    lastDisconnect?.error &&
+                    (lastDisconnect.error instanceof Boom
+                        ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
                         : true);
                 
                 console.log('Connection closed. Reconnecting:', shouldReconnect);
@@ -87,16 +141,67 @@ async function connectToWhatsApp() {
             } else if (connection === 'open') {
                 console.log('Bot is now connected!');
                 console.log('Bot User ID:', sock.user.id);
+                
+                // Update channels and groups list
+                try {
+                    const chats = await sock.groupFetchAllParticipating();
+                    
+                    channels = [];
+                    groups = [];
+
+                    for (const chat of Object.values(chats)) {
+                        if (chat.isChannel || chat.subject?.startsWith('Channel: ')) {
+                            channels.push({
+                                id: chat.id,
+                                name: chat.subject
+                            });
+                        } else {
+                            groups.push({
+                                id: chat.id,
+                                name: chat.subject
+                            });
+                        }
+                    }
+
+                    console.log(`Updated lists: ${channels.length} channels and ${groups.length} groups found`);
+                } catch (error) {
+                    console.error('Error updating channels and groups list:', error);
+                }
             }
         });
 
-        // Rest of the methods (sendMessageWithRetry, isAdmin, etc.) remain the same as in previous script
+        // Credentials update handler
+        sock.ev.on('creds.update', saveCreds);
+
+        // Message handling
+        sock.ev.on('messages.upsert', async ({ messages }) => {
+            const m = messages[0];
+
+            if (!m.message) return;
+
+            const messageContent = m.message?.conversation || m.message?.extendedTextMessage?.text || '';
+            const isReply = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            const sender = m.key.participant || m.key.remoteJid;
+
+            console.log('Incoming Message Details:');
+            console.log('Sender:', sender);
+            console.log('Message Content:', messageContent);
+
+            // Add your message handling logic here
+            // For example, broadcast command handling
+        });
+
+        // Ensure auth directory exists
+        if (!fs.existsSync('auth_info_baileys')) {
+            fs.mkdirSync('auth_info_baileys');
+        }
 
         return sock;
     } catch (error) {
         console.error('Fatal error in WhatsApp connection:', error);
         // Attempt to reconnect after a delay
         setTimeout(connectToWhatsApp, 5000);
+        throw error;
     }
 }
 
@@ -111,6 +216,15 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
     // Restart the bot process
     setTimeout(connectToWhatsApp, 1000);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received. Shutting down gracefully.');
+    server.close(() => {
+        console.log('HTTP server closed.');
+        process.exit(0);
+    });
 });
 
 // Start the bot
