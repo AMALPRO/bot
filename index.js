@@ -431,7 +431,6 @@ async function connectToWhatsApp() {
             const normalizedOwners = CONFIG.OWNERS.map(normalizeNumber);
             
             console.log('Normalized User ID:', normalizedUserId);
-            console.log('Normalized Owners:', normalizedOwners
             console.log('Normalized Owners:', normalizedOwners);
             
             // Check if the user is in the owners list
