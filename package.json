@@ -5,10 +5,11 @@
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {
-    "@whiskeysockets/baileys": "latest",
-    "@hapi/boom": "latest",
-    "pino": "latest",
-    "express": "latest"
-  }
+"dependencies": {
+  "@whiskeysockets/baileys": "latest",
+  "express": "latest",
+  "qrcode": "latest",
+  "pino": "latest",
+  "@hapi/boom": "latest",
+  "link-preview-js": "latest"
 }
