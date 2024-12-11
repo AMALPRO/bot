@@ -9,7 +9,7 @@ const QRCode = require('qrcode');
 // Configuration for multiple owners and bot settings
 const CONFIG = {
     OWNERS: [
-        '+917356008536'  // Ensure this is the correct full international number
+        '+918592968704'  // Ensure this is the correct full international number
     ],
     MAX_CONCURRENT_BROADCASTS: 3, // Reduced for better stability
     BROADCAST_DELAY: 2000, // Increased delay to 2 seconds between messages
